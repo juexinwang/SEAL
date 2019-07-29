@@ -1,7 +1,8 @@
 import torch
 import numpy as np
 import sys, copy, math, time, pdb
-import cPickle as pickle
+import pickle as cPickle
+#import cPickle as pickle
 import scipy.io as sio
 import scipy.sparse as ssp
 import os.path
@@ -56,15 +57,21 @@ args.file_dir = os.path.dirname(os.path.realpath('__file__'))
 args.res_dir = os.path.join(args.file_dir, 'results/{}'.format(args.data_name))
 
 if args.train_name is None:
-    args.data_dir = os.path.join(args.file_dir, 'data/{}.mat'.format(args.data_name))
-    data = sio.loadmat(args.data_dir)
-    net = data['net']
-    if data.has_key('group'):
-        # load node attributes (here a.k.a. node classes)
-        attributes = data['group'].toarray().astype('float32')
+    if args.data_name == 'dream':
+        net = np.load(os.path.join(args.file_dir, 'data/dream/ind.dream3.csc'))
+        group = np.load(os.path.join(args.file_dir, 'data/dream/ind.dream3.allx'))
+        attributes =group.toarray().astype('float32')
+        
     else:
-        attributes = None
-    # check whether net is symmetric (for small nets only)
+        args.data_dir = os.path.join(args.file_dir, 'data/{}.mat'.format(args.data_name))
+        data = sio.loadmat(args.data_dir)
+        net = data['net']
+        if 'group' in data:
+            # load node attributes (here a.k.a. node classes)
+            attributes = data['group'].toarray().astype('float32')
+        else:
+            attributes = None
+        # check whether net is symmetric (for small nets only)
     if False:
         net_ = net.toarray()
         assert(np.allclose(net_, net_.T, atol=1e-8))

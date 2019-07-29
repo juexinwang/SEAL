@@ -3,8 +3,8 @@ import numpy as np
 import random
 from tqdm import tqdm
 import os, sys, pdb, math
-import cPickle as cp
-#import _pickle as cp  # python3 compatability
+#import cPickle as cp
+import _pickle as cp  # python3 compatability
 import networkx as nx
 import argparse
 import scipy.io as sio
@@ -12,12 +12,28 @@ import scipy.sparse as ssp
 from sklearn import metrics
 from gensim.models import Word2Vec
 import warnings
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 warnings.simplefilter('ignore', ssp.SparseEfficiencyWarning)
 cur_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append('%s/../../pytorch_DGCNN' % cur_dir)
 sys.path.append('%s/software/node2vec/src' % cur_dir)
 from util import GNNGraph
 import node2vec
+
+def genenet_attribute(allx,tfNum):
+    #1: average to one dimension
+    allx = StandardScaler().fit_transform(allx)
+    trainAttributes = np.average(allx, axis=1).reshape((len(allx),1))
+    tfAttr = np.zeros((len(allx),1))
+    for i in np.arange(334) :
+        tfAttr[i]=1.0
+    trainAttributes = np.concatenate([trainAttributes, tfAttr], axis=1)
+    #2. PCA to 3 dimensions
+    # allx = StandardScaler().fit_transform(allx)
+    # pca = PCA(n_components=3)
+    # trainAttributes = pca.fit_transform(allx)
+    return trainAttributes
 
 def sample_neg(net, test_ratio=0.1, train_pos=None, test_pos=None, max_train_num=None):
     # get upper triangular matrix
@@ -85,6 +101,38 @@ def links2subgraphs(A, train_pos, train_neg, test_pos, test_neg, h=1, max_nodes_
     print(max_n_label)
     return train_graphs, test_graphs, max_n_label['value']
 
+def links2subgraphsTran(Atrain, Atest, train_pos, train_neg, test_pos, test_neg, h=1, max_nodes_per_hop=None, train_node_information=None, test_node_information=None):
+    # automatically select h from {1, 2}
+    if h == 'auto': # TODO
+        # split train into val_train and val_test
+        _, _, val_test_pos, val_test_neg = sample_neg(A, 0.1)
+        val_A = A.copy()
+        val_A[val_test_pos[0], val_test_pos[1]] = 0
+        val_A[val_test_pos[1], val_test_pos[0]] = 0
+        val_auc_CN = CN(val_A, val_test_pos, val_test_neg)
+        val_auc_AA = AA(val_A, val_test_pos, val_test_neg)
+        print('\033[91mValidation AUC of AA is {}, CN is {}\033[0m'.format(val_auc_AA, val_auc_CN))
+        if val_auc_AA >= val_auc_CN:
+            h = 2
+            print('\033[91mChoose h=2\033[0m')
+        else:
+            h = 1
+            print('\033[91mChoose h=1\033[0m')
+
+    # extract enclosing subgraphs
+    max_n_label = {'value': 0}
+    def helper(A, links, g_label, node_information):
+        g_list = []
+        for i, j in tqdm(zip(links[0], links[1])):
+            g, n_labels, n_features = subgraph_extraction_labeling((i, j), A, h, max_nodes_per_hop, node_information)
+            max_n_label['value'] = max(max(n_labels), max_n_label['value'])
+            g_list.append(GNNGraph(g, g_label, n_labels, n_features))
+        return g_list
+    print('Enclosing subgraph extraction begins...')
+    train_graphs = helper(Atrain, train_pos, 1, train_node_information) + helper(Atrain, train_neg, 0, train_node_information)
+    test_graphs = helper(Atest, test_pos, 1, test_node_information) + helper(Atest, test_neg, 0, test_node_information)
+    print(max_n_label)
+    return train_graphs, test_graphs, max_n_label['value']
 
 def subgraph_extraction_labeling(ind, A, h=1, max_nodes_per_hop=None, node_information=None):
     # extract the h-hop enclosing subgraph around link 'ind'
@@ -137,7 +185,7 @@ def node_label(subgraph):
     # an implementation of the proposed double-radius node labeling (DRNL)
     K = subgraph.shape[0]
     subgraph_wo0 = subgraph[1:, 1:]
-    subgraph_wo1 = subgraph[[0]+range(2, K), :][:, [0]+range(2, K)]
+    subgraph_wo1 = subgraph[[0]+list(range(2, K)), :][:, [0]+list(range(2, K))]
     dist_to_0 = ssp.csgraph.shortest_path(subgraph_wo0, directed=False, unweighted=True)
     dist_to_0 = dist_to_0[1:, 0]
     dist_to_1 = ssp.csgraph.shortest_path(subgraph_wo1, directed=False, unweighted=True)
@@ -162,7 +210,7 @@ def generate_node2vec_embeddings(A, emd_size=128, negative_injection=False, trai
     G = node2vec.Graph(nx_G, is_directed=False, p=1, q=1)
     G.preprocess_transition_probs()
     walks = G.simulate_walks(num_walks=10, walk_length=80)
-    walks = [map(str, walk) for walk in walks]
+    walks = [list(map(str, walk)) for walk in walks]
     model = Word2Vec(walks, size=emd_size, window=10, min_count=0, sg=1, 
             workers=8, iter=1)
     wv = model.wv
